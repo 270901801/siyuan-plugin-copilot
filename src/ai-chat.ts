@@ -714,15 +714,11 @@ async function chatOpenAIFormat(
         
         // 检查是否是流式响应格式（SSE）
         if (data.body && typeof data.body === 'string' && data.body.startsWith('data: ')) {
-            // 解析SSE格式的响应，模拟流式渲染
+            // 解析SSE格式的响应，直接显示完整内容
             const sseBody = data.body;
             const lines = sseBody.split('\n');
             let fullText = '';
             let thinkingText = '';
-            
-            // 模拟流式渲染效果，逐字输出
-            let accumulatedContent = '';
-            let accumulatedThinking = '';
             
             for (const line of lines) {
                 const trimmed = line.trim();
@@ -736,35 +732,27 @@ async function chatOpenAIFormat(
                             // 提取内容
                             if (delta?.content) {
                                 fullText += delta.content;
-                                accumulatedContent += delta.content;
-                                
-                                // 逐字输出，模拟流式效果
-                                for (let i = 0; i < delta.content.length; i++) {
-                                    const char = delta.content[i];
-                                    options.onChunk?.(char);
-                                    // 添加微小延迟，模拟真实流式效果
-                                    await new Promise(resolve => setTimeout(resolve, 10));
-                                }
                             }
                             
                             // 提取思考内容
                             if (delta?.reasoning || delta?.reasoning_content) {
                                 const reasoningContent = delta.reasoning || delta.reasoning_content || '';
                                 thinkingText += reasoningContent;
-                                accumulatedThinking += reasoningContent;
-                                
-                                // 逐字输出思考内容
-                                for (let i = 0; i < reasoningContent.length; i++) {
-                                    const char = reasoningContent[i];
-                                    options.onThinkingChunk?.(char);
-                                    await new Promise(resolve => setTimeout(resolve, 10));
-                                }
                             }
                         } catch (e) {
                             console.error('Failed to parse SSE data:', e);
                         }
                     }
                 }
+            }
+            
+            // 直接显示完整内容
+            if (fullText) {
+                options.onChunk?.(fullText);
+            }
+            // 直接显示完整思考内容
+            if (thinkingText) {
+                options.onThinkingChunk?.(thinkingText);
             }
             
             // 触发完成回调
@@ -774,16 +762,11 @@ async function chatOpenAIFormat(
                 options.onThinkingComplete?.(thinkingText);
             }
         } else {
-            // 处理非流式响应
+            // 处理非流式响应，直接显示完整内容
             const content = data.choices?.[0]?.message?.content || '';
             
-            // 逐字输出，模拟流式效果
-            for (let i = 0; i < content.length; i++) {
-                const char = content[i];
-                options.onChunk?.(char);
-                await new Promise(resolve => setTimeout(resolve, 10));
-            }
-            
+            // 直接显示完整内容
+            options.onChunk?.(content);
             options.onComplete?.(content);
         }
     } catch (error) {
@@ -996,7 +979,7 @@ async function chatGeminiFormat(
         
         // 检查是否是流式响应格式（SSE）
         if (data.body && typeof data.body === 'string' && data.body.startsWith('data: ')) {
-            // 解析SSE格式的响应，模拟流式渲染
+            // 解析SSE格式的响应，直接显示完整内容
             const sseBody = data.body;
             const lines = sseBody.split('\n');
             let fullText = '';
@@ -1016,25 +999,10 @@ async function chatGeminiFormat(
                                 for (const part of candidates[0].content.parts) {
                                     if (part.text) {
                                         fullText += part.text;
-                                        
-                                        // 逐字输出，模拟流式效果
-                                        for (let i = 0; i < part.text.length; i++) {
-                                            const char = part.text[i];
-                                            options.onChunk?.(char);
-                                            // 添加微小延迟，模拟真实流式效果
-                                            await new Promise(resolve => setTimeout(resolve, 10));
-                                        }
                                     }
                                     // 处理思考内容
                                     if (part.thought === true && part.text) {
                                         thinkingText += part.text;
-                                        
-                                        // 逐字输出思考内容
-                                        for (let i = 0; i < part.text.length; i++) {
-                                            const char = part.text[i];
-                                            options.onThinkingChunk?.(char);
-                                            await new Promise(resolve => setTimeout(resolve, 10));
-                                        }
                                     }
                                 }
                             }
@@ -1045,6 +1013,15 @@ async function chatGeminiFormat(
                 }
             }
             
+            // 直接显示完整内容
+            if (fullText) {
+                options.onChunk?.(fullText);
+            }
+            // 直接显示完整思考内容
+            if (thinkingText) {
+                options.onThinkingChunk?.(thinkingText);
+            }
+            
             // 触发完成回调
             options.onComplete?.(fullText);
             // 触发思考完成回调
@@ -1052,7 +1029,7 @@ async function chatGeminiFormat(
                 options.onThinkingComplete?.(thinkingText);
             }
         } else {
-            // 处理非流式响应
+            // 处理非流式响应，直接显示完整内容
             let fullText = '';
             
             // 处理Gemini响应数据
@@ -1064,13 +1041,8 @@ async function chatGeminiFormat(
                 }
             }
             
-            // 逐字输出，模拟流式效果
-            for (let i = 0; i < fullText.length; i++) {
-                const char = fullText[i];
-                options.onChunk?.(char);
-                await new Promise(resolve => setTimeout(resolve, 10));
-            }
-            
+            // 直接显示完整内容
+            options.onChunk?.(fullText);
             options.onComplete?.(fullText);
         }
     } catch (error) {
