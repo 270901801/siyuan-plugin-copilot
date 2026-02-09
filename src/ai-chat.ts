@@ -4,6 +4,8 @@
  * 支持图片生成功能
  */
 
+import { siyuanRequest } from './utils/network';
+
 export interface ToolCall {
     id: string;
     type: 'function';
@@ -382,34 +384,80 @@ export async function fetchModels(
             headers[config.apiKeyHeader] = `Bearer ${apiKey}`;
         }
 
-        const response = await fetch(url, {
-            method: 'GET',
-            headers
-        });
+        let data: any;
 
-        if (!response.ok) {
-            // 尝试读取错误响应体中的详细错误信息
-            let errorMessage = `Failed to fetch models: ${response.status} ${response.statusText}`;
-            try {
-                const errorData = await response.json();
-                // 尝试提取常见的错误消息字段
-                const detailMsg = errorData.error?.message || errorData.message || errorData.error || JSON.stringify(errorData);
-                errorMessage += `\n\n${detailMsg}`;
-            } catch (e) {
-                // 如果无法解析 JSON，尝试读取文本
+        // 尝试直接使用fetch API
+        try {
+            const fetchResponse = await fetch(url, {
+                method: 'GET',
+                headers
+            });
+
+            if (!fetchResponse.ok) {
+                let errorMessage = `Failed to fetch models: ${fetchResponse.status} ${fetchResponse.statusText}`;
                 try {
-                    const errorText = await response.text();
-                    if (errorText) {
-                        errorMessage += `\n\n${errorText}`;
+                    const errorData = await fetchResponse.json();
+                    const detailMsg = errorData.error?.message || errorData.message || errorData.error || JSON.stringify(errorData);
+                    errorMessage += `\n\n${detailMsg}`;
+                } catch (e) {
+                    try {
+                        const errorText = await fetchResponse.text();
+                        if (errorText) {
+                            errorMessage += `\n\n${errorText}`;
+                        }
+                    } catch (textError) {
+                        // 忽略文本读取错误
                     }
-                } catch (textError) {
-                    // 忽略文本读取错误
                 }
+                throw new Error(errorMessage);
             }
-            throw new Error(errorMessage);
-        }
 
-        const data = await response.json();
+            data = await fetchResponse.json();
+        } catch (fetchError) {
+            console.warn('Fetch failed (可能是跨域问题)，尝试使用 siyuanRequest:', fetchError);
+            
+            // 使用 siyuanRequest 作为备用方案（解决跨域问题）
+            const response = await siyuanRequest({
+                url,
+                method: 'GET',
+                headers,
+                timeout: 30000
+            });
+
+            if (!response.ok) {
+                let errorMessage = `Failed to fetch models: ${response.status} ${response.statusText}`;
+                try {
+                    const errorData = response.data;
+                    let errorContent = errorData;
+                    // 如果是 IResForwardProxy 格式，解析 body
+                    if (errorData.body) {
+                        try {
+                            errorContent = JSON.parse(errorData.body);
+                        } catch (e) {
+                            errorContent = errorData.body;
+                        }
+                    }
+                    const detailMsg = errorContent.error?.message || errorContent.message || errorContent.error || JSON.stringify(errorContent);
+                    errorMessage += `\n\n${detailMsg}`;
+                } catch (e) {
+                    errorMessage += `\n\n${JSON.stringify(response.data)}`;
+                }
+                throw new Error(errorMessage);
+            }
+
+            // 处理 siyuanRequest 返回的数据格式
+            let responseData = response.data;
+            // 如果是 IResForwardProxy 格式，解析 body
+            if (responseData.body) {
+                try {
+                    data = JSON.parse(responseData.body);
+                } catch (e) {
+                    throw new Error(`Failed to parse response body: ${e.message}`);
+                }
+            } else {
+                data = responseData;
+            }
+        }
 
         // 处理不同平台的响应格式
         if (provider === 'gemini') {
@@ -598,41 +646,144 @@ async function chatOpenAIFormat(
     };
 
     try {
-        const response = await fetch(url, {
+        // 尝试直接使用fetch API（支持真正的流式响应）
+        try {
+            const fetchResponse = await fetch(url, {
+                method: 'POST',
+                headers,
+                body: JSON.stringify(requestBody),
+                signal: options.signal
+            });
+
+            if (!fetchResponse.ok) {
+                let errorMessage = `API request failed: ${fetchResponse.status} ${fetchResponse.statusText}`;
+                try {
+                    const errorData = await fetchResponse.json();
+                    const detailMsg = errorData.error?.message || errorData.message || errorData.error || JSON.stringify(errorData);
+                    errorMessage += `\n\n${detailMsg}`;
+                } catch (e) {
+                    try {
+                        const errorText = await fetchResponse.text();
+                        if (errorText) {
+                            errorMessage += `\n\n${errorText}`;
+                        }
+                    } catch (e2) {
+                        // Ignore
+                    }
+                }
+                throw new Error(errorMessage);
+            }
+
+            // 检查是否是流式响应
+            if (fetchResponse.body) {
+                // 处理真正的流式响应
+                await handleStreamResponse(fetchResponse.body, options);
+                return;
+            }
+        } catch (fetchError) {
+            console.warn('Fetch failed (可能是跨域问题)，尝试使用 siyuanRequest:', fetchError);
+            // 继续执行，使用 siyuanRequest 作为备用方案
+        }
+
+        // 使用 siyuanRequest 作为备用方案（解决跨域问题）
+        const response = await siyuanRequest({
+            url,
             method: 'POST',
             headers,
-            body: JSON.stringify(requestBody),
-            signal: options.signal // 传递 AbortSignal
+            body: requestBody,
+            timeout: 120000 // AI请求超时时间设置为2分钟
         });
 
         if (!response.ok) {
             // 尝试读取错误响应体中的详细错误信息
             let errorMessage = `API request failed: ${response.status} ${response.statusText}`;
             try {
-                const errorData = await response.json();
+                const errorData = response.data;
                 // 尝试提取常见的错误消息字段
                 const detailMsg = errorData.error?.message || errorData.message || errorData.error || JSON.stringify(errorData);
                 errorMessage += `\n\n${detailMsg}`;
             } catch (e) {
-                // 如果无法解析 JSON，尝试读取文本
-                try {
-                    const errorText = await response.text();
-                    if (errorText) {
-                        errorMessage += `\n\n${errorText}`;
-                    }
-                } catch (textError) {
-                    // 忽略文本读取错误
-                }
+                // 如果无法解析错误数据
+                errorMessage += `\n\n${JSON.stringify(response.data)}`;
             }
             throw new Error(errorMessage);
         }
 
-        if (options.stream !== false && response.body) {
-            await handleStreamResponse(response.body, options);
+        // 处理forwardProxy返回的响应
+        const data = response.data;
+        
+        // 检查是否是流式响应格式（SSE）
+        if (data.body && typeof data.body === 'string' && data.body.startsWith('data: ')) {
+            // 解析SSE格式的响应，模拟流式渲染
+            const sseBody = data.body;
+            const lines = sseBody.split('\n');
+            let fullText = '';
+            let thinkingText = '';
+            
+            // 模拟流式渲染效果，逐字输出
+            let accumulatedContent = '';
+            let accumulatedThinking = '';
+            
+            for (const line of lines) {
+                const trimmed = line.trim();
+                if (trimmed.startsWith('data: ')) {
+                    const payload = trimmed.slice(6).trim();
+                    if (payload && payload !== '[DONE]') {
+                        try {
+                            const json = JSON.parse(payload);
+                            const delta = json.choices?.[0]?.delta;
+                            
+                            // 提取内容
+                            if (delta?.content) {
+                                fullText += delta.content;
+                                accumulatedContent += delta.content;
+                                
+                                // 逐字输出，模拟流式效果
+                                for (let i = 0; i < delta.content.length; i++) {
+                                    const char = delta.content[i];
+                                    options.onChunk?.(char);
+                                    // 添加微小延迟，模拟真实流式效果
+                                    await new Promise(resolve => setTimeout(resolve, 10));
+                                }
+                            }
+                            
+                            // 提取思考内容
+                            if (delta?.reasoning || delta?.reasoning_content) {
+                                const reasoningContent = delta.reasoning || delta.reasoning_content || '';
+                                thinkingText += reasoningContent;
+                                accumulatedThinking += reasoningContent;
+                                
+                                // 逐字输出思考内容
+                                for (let i = 0; i < reasoningContent.length; i++) {
+                                    const char = reasoningContent[i];
+                                    options.onThinkingChunk?.(char);
+                                    await new Promise(resolve => setTimeout(resolve, 10));
+                                }
+                            }
+                        } catch (e) {
+                            console.error('Failed to parse SSE data:', e);
+                        }
+                    }
+                }
+            }
+            
+            // 触发完成回调
+            options.onComplete?.(fullText);
+            // 触发思考完成回调
+            if (thinkingText) {
+                options.onThinkingComplete?.(thinkingText);
+            }
         } else {
-            const data = await response.json();
+            // 处理非流式响应
             const content = data.choices?.[0]?.message?.content || '';
-            options.onChunk?.(content);
+            
+            // 逐字输出，模拟流式效果
+            for (let i = 0; i < content.length; i++) {
+                const char = content[i];
+                options.onChunk?.(char);
+                await new Promise(resolve => setTimeout(resolve, 10));
+            }
+            
             options.onComplete?.(content);
         }
     } catch (error) {
@@ -773,39 +924,154 @@ async function chatGeminiFormat(
     }
 
     try {
-        const response = await fetch(url, {
+        // 尝试直接使用fetch API（支持真正的流式响应）
+        try {
+            const fetchResponse = await fetch(url, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify(requestBody),
+                signal: options.signal
+            });
+
+            if (!fetchResponse.ok) {
+                let errorMessage = `API request failed: ${fetchResponse.status} ${fetchResponse.statusText}`;
+                try {
+                    const errorData = await fetchResponse.json();
+                    const detailMsg = errorData.error?.message || errorData.message || errorData.error || JSON.stringify(errorData);
+                    errorMessage += `\n\n${detailMsg}`;
+                } catch (e) {
+                    try {
+                        const errorText = await fetchResponse.text();
+                        if (errorText) {
+                            errorMessage += `\n\n${errorText}`;
+                        }
+                    } catch (e2) {
+                        // Ignore
+                    }
+                }
+                throw new Error(errorMessage);
+            }
+
+            // 检查是否是流式响应
+            if (fetchResponse.body) {
+                // 处理真正的流式响应
+                await handleGeminiStreamResponse(fetchResponse.body, options);
+                return;
+            }
+        } catch (fetchError) {
+            console.warn('Fetch failed (可能是跨域问题)，尝试使用 siyuanRequest:', fetchError);
+            // 继续执行，使用 siyuanRequest 作为备用方案
+        }
+
+        // 使用 siyuanRequest 作为备用方案（解决跨域问题）
+        const response = await siyuanRequest({
+            url,
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json'
             },
-            body: JSON.stringify(requestBody),
-            signal: options.signal // 传递 AbortSignal
+            body: requestBody,
+            timeout: 120000 // AI请求超时时间设置为2分钟
         });
 
         if (!response.ok) {
             // 尝试读取错误响应体中的详细错误信息
             let errorMessage = `API request failed: ${response.status} ${response.statusText}`;
             try {
-                const errorData = await response.json();
+                const errorData = response.data;
                 // 尝试提取常见的错误消息字段
                 const detailMsg = errorData.error?.message || errorData.message || errorData.error || JSON.stringify(errorData);
                 errorMessage += `\n\n${detailMsg}`;
             } catch (e) {
-                // 如果无法解析 JSON，尝试读取文本
-                try {
-                    const errorText = await response.text();
-                    if (errorText) {
-                        errorMessage += `\n\n${errorText}`;
-                    }
-                } catch (textError) {
-                    // 忽略文本读取错误
-                }
+                // 如果无法解析错误数据
+                errorMessage += `\n\n${JSON.stringify(response.data)}`;
             }
             throw new Error(errorMessage);
         }
 
-        if (response.body) {
-            await handleGeminiStreamResponse(response.body, options);
+        // 处理forwardProxy返回的响应
+        const data = response.data;
+        
+        // 检查是否是流式响应格式（SSE）
+        if (data.body && typeof data.body === 'string' && data.body.startsWith('data: ')) {
+            // 解析SSE格式的响应，模拟流式渲染
+            const sseBody = data.body;
+            const lines = sseBody.split('\n');
+            let fullText = '';
+            let thinkingText = '';
+            
+            for (const line of lines) {
+                const trimmed = line.trim();
+                if (trimmed.startsWith('data: ')) {
+                    const payload = trimmed.slice(6).trim();
+                    if (payload && payload !== '[DONE]') {
+                        try {
+                            const json = JSON.parse(payload);
+                            const candidates = json.candidates;
+                            
+                            // 处理Gemini格式的响应
+                            if (candidates && candidates[0] && candidates[0].content && candidates[0].content.parts) {
+                                for (const part of candidates[0].content.parts) {
+                                    if (part.text) {
+                                        fullText += part.text;
+                                        
+                                        // 逐字输出，模拟流式效果
+                                        for (let i = 0; i < part.text.length; i++) {
+                                            const char = part.text[i];
+                                            options.onChunk?.(char);
+                                            // 添加微小延迟，模拟真实流式效果
+                                            await new Promise(resolve => setTimeout(resolve, 10));
+                                        }
+                                    }
+                                    // 处理思考内容
+                                    if (part.thought === true && part.text) {
+                                        thinkingText += part.text;
+                                        
+                                        // 逐字输出思考内容
+                                        for (let i = 0; i < part.text.length; i++) {
+                                            const char = part.text[i];
+                                            options.onThinkingChunk?.(char);
+                                            await new Promise(resolve => setTimeout(resolve, 10));
+                                        }
+                                    }
+                                }
+                            }
+                        } catch (e) {
+                            console.error('Failed to parse Gemini SSE data:', e);
+                        }
+                    }
+                }
+            }
+            
+            // 触发完成回调
+            options.onComplete?.(fullText);
+            // 触发思考完成回调
+            if (thinkingText) {
+                options.onThinkingComplete?.(thinkingText);
+            }
+        } else {
+            // 处理非流式响应
+            let fullText = '';
+            
+            // 处理Gemini响应数据
+            if (data.candidates && data.candidates[0] && data.candidates[0].content && data.candidates[0].content.parts) {
+                for (const part of data.candidates[0].content.parts) {
+                    if (part.text) {
+                        fullText += part.text;
+                    }
+                }
+            }
+            
+            // 逐字输出，模拟流式效果
+            for (let i = 0; i < fullText.length; i++) {
+                const char = fullText[i];
+                options.onChunk?.(char);
+                await new Promise(resolve => setTimeout(resolve, 10));
+            }
+            
+            options.onComplete?.(fullText);
         }
     } catch (error) {
         // 检查是否是用户主动中断
@@ -825,17 +1091,47 @@ async function chatGeminiFormat(
  */
 async function imageUrlToBase64(url: string): Promise<string> {
     try {
-        const response = await fetch(url);
-        const blob = await response.blob();
-        return new Promise((resolve, reject) => {
-            const reader = new FileReader();
-            reader.onloadend = () => {
-                const result = reader.result as string;
-                resolve(result.replace(/^data:image\/\w+;base64,/, ''));
-            };
-            reader.onerror = reject;
-            reader.readAsDataURL(blob);
+        // 处理 blob URL
+        if (url.startsWith('blob:')) {
+            const response = await fetch(url);
+            const blob = await response.blob();
+            return new Promise((resolve, reject) => {
+                const reader = new FileReader();
+                reader.onloadend = () => {
+                    const result = reader.result as string;
+                    resolve(result.replace(/^data:image\/\w+;base64,/, ''));
+                };
+                reader.onerror = reject;
+                reader.readAsDataURL(blob);
+            });
+        }
+        
+        // 处理其他 URL，使用 siyuanRequest 避免跨域问题
+        const response = await siyuanRequest({
+            url,
+            method: 'GET',
+            timeout: 30000,
+            responseType: 'blob'
         });
+        
+        // 注意：siyuanRequest 返回的是 JSON 格式，对于图片可能需要特殊处理
+        // 这里我们假设返回的是 base64 数据或可以转换的数据
+        if (response.data) {
+            // 如果返回的是对象，尝试提取数据
+            if (typeof response.data === 'object' && response.data.base64) {
+                return response.data.base64;
+            }
+            // 如果返回的是字符串，尝试解析
+            else if (typeof response.data === 'string') {
+                // 检查是否是完整的 data URL
+                if (response.data.startsWith('data:image/')) {
+                    return response.data.replace(/^data:image\/\w+;base64,/, '');
+                }
+                return response.data;
+            }
+        }
+        
+        return '';
     } catch (e) {
         console.error('Failed to convert image to base64:', url, e);
         return '';
@@ -1232,22 +1528,23 @@ export async function generateImage(
     };
 
     try {
-        const response = await fetch(url, {
+        const response = await siyuanRequest({
+            url,
             method: 'POST',
             headers,
-            body: JSON.stringify(requestBody),
-            signal: options.signal
+            body: requestBody,
+            timeout: 300000 // 图片生成可能需要较长时间，设置5分钟超时
         });
 
         if (!response.ok) {
             let errorMessage = `Image generation failed: ${response.status} ${response.statusText}`;
             try {
-                const errorData = await response.json();
+                const errorData = response.data;
                 const detailMsg = errorData.error?.message || errorData.message || errorData.error || JSON.stringify(errorData);
                 errorMessage += `\n\n${detailMsg}`;
             } catch (e) {
                 try {
-                    const errorText = await response.text();
+                    const errorText = JSON.stringify(response.data);
                     if (errorText) {
                         errorMessage += `\n\n${errorText}`;
                     }
@@ -1258,7 +1555,7 @@ export async function generateImage(
             throw new Error(errorMessage);
         }
 
-        const data = await response.json();
+        const data = response.data;
 
         // 处理响应数据
         // OpenAI 格式: { data: [{ url: string, b64_json: string, revised_prompt: string }] }

@@ -72,6 +72,11 @@
     let inputContainer: HTMLElement;
     let fileInputElement: HTMLInputElement;
 
+    // 导航侧边栏状态
+    let showNavigation = false;
+    let isNavigationFixed = false;
+    let activeNavigationGroup = -1;
+
     // 思考过程折叠状态管理
     let thinkingCollapsed: Record<number, boolean> = {};
 
@@ -98,6 +103,50 @@
 
     // 中断控制
     let abortController: AbortController | null = null;
+
+    // 获取导航项内容
+    function getNavigationItemContent(content: any): string {
+        if (typeof content === 'string') {
+            const text = content.trim();
+            return text.length > 30 ? text.substring(0, 30) + '...' : text;
+        } else if (Array.isArray(content)) {
+            const textContent = content.find(item => item.type === 'text')?.text || '';
+            return textContent.length > 30 ? textContent.substring(0, 30) + '...' : textContent;
+        }
+        return '无内容';
+    }
+
+    // 滚动到指定消息组
+    async function scrollToMessageGroup(groupIndex: number) {
+        await tick();
+        if (messagesContainer) {
+            const messageElement = messagesContainer.querySelector(`[data-group-index="${groupIndex}"]`);
+            if (messageElement) {
+                messageElement.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                activeNavigationGroup = groupIndex;
+            }
+        }
+    }
+
+    // 更新活动导航组
+    function updateActiveNavigationGroup() {
+        if (!messagesContainer) return;
+        
+        const messageElements = Array.from(messagesContainer.querySelectorAll('.ai-message'));
+        for (let i = messageElements.length - 1; i >= 0; i--) {
+            const element = messageElements[i];
+            const rect = element.getBoundingClientRect();
+            const containerRect = messagesContainer.getBoundingClientRect();
+            
+            if (rect.top <= containerRect.top + 100) {
+                const groupIndex = parseInt(element.getAttribute('data-group-index') || '-1');
+                if (groupIndex !== -1) {
+                    activeNavigationGroup = groupIndex;
+                    break;
+                }
+            }
+        }
+    }
     let isAborted = false; // 标记是否已中断，防止中断后 onComplete 重复添加消息
 
     // 自动滚动控制
@@ -1139,6 +1188,9 @@
             // 如果正在加载且用户滚动离开底部，停止自动滚动
             autoScroll = false;
         }
+
+        // 更新活动导航组
+        updateActiveNavigationGroup();
     }
 
     // 全屏切换
@@ -7653,208 +7705,258 @@
 </script>
 
 <div class="ai-sidebar" class:ai-sidebar--fullscreen={isFullscreen} bind:this={sidebarContainer}>
-    <div class="ai-sidebar__header">
-        <h3 class="ai-sidebar__title">
-            {#if hasUnsavedChanges}
-                <span class="ai-sidebar__unsaved" title={t('aiSidebar.unsavedChanges')}>●</span>
-            {/if}
-        </h3>
-        <div class="ai-sidebar__actions">
-            <button
-                class="b3-button b3-button--text"
-                on:click={newSession}
-                title={t('aiSidebar.session.new')}
-            >
-                <svg class="b3-button__icon"><use xlink:href="#iconAdd"></use></svg>
-            </button>
-            <SessionManager
-                bind:sessions
-                bind:currentSessionId
-                bind:isOpen={isSessionManagerOpen}
-                on:refresh={loadSessions}
-                on:load={e => loadSession(e.detail.sessionId)}
-                on:delete={e => deleteSession(e.detail.sessionId)}
-                on:batchDelete={e => batchDeleteSessions(e.detail.sessionIds)}
-                on:new={newSession}
-                on:update={e => handleSessionUpdate(e.detail.sessions)}
-            />
-            <div class="ai-sidebar__open-window-menu-container" style="position: relative;">
+    <!-- 导航侧边栏 -->
+    <div class="ai-sidebar__navigation" class:ai-sidebar__navigation--hidden={!showNavigation} class:ai-sidebar__navigation--fixed={isNavigationFixed}>
+        <div class="ai-sidebar__navigation-header">
+            <h4 class="ai-sidebar__navigation-title">对话导航</h4>
+            <div class="ai-sidebar__navigation-actions">
                 <button
                     class="b3-button b3-button--text"
-                    bind:this={openWindowMenuButton}
-                    on:click={toggleOpenWindowMenu}
-                    title="在新窗口打开"
+                    on:click={() => isNavigationFixed = !isNavigationFixed}
+                    title={isNavigationFixed ? '取消固定' : '固定'}
                 >
-                    <svg class="b3-button__icon"><use xlink:href="#iconOpenWindow"></use></svg>
+                    <svg class="b3-button__icon"><use xlink:href={isNavigationFixed ? '#iconPin' : '#iconPin'}></use></svg>
                 </button>
-                {#if showOpenWindowMenu}
-                    <div class="ai-sidebar__open-window-menu">
-                        <button class="b3-menu__item" on:click={openInTab}>
-                            <svg class="b3-menu__icon">
-                                <use xlink:href="#iconOpenWindow"></use>
-                            </svg>
-                            <span class="b3-menu__label">在页签打开</span>
-                        </button>
-                        <button class="b3-menu__item" on:click={openInNewWindow}>
-                            <svg class="b3-menu__icon">
-                                <use xlink:href="#iconOpenWindow"></use>
-                            </svg>
-                            <span class="b3-menu__label">在新窗口打开</span>
-                        </button>
-                    </div>
-                {/if}
+                <button
+                    class="b3-button b3-button--text"
+                    on:click={() => showNavigation = false}
+                    title="隐藏导航"
+                >
+                    <svg class="b3-button__icon"><use xlink:href="#iconClose"></use></svg>
+                </button>
             </div>
-            <button
-                class="b3-button b3-button--text"
-                on:click={copyAsMarkdown}
-                title={t('aiSidebar.actions.copyAllChat')}
-            >
-                <svg class="b3-button__icon"><use xlink:href="#iconCopy"></use></svg>
-            </button>
-            <button
-                class="b3-button b3-button--text"
-                on:click={() => openSaveToNoteDialog()}
-                title={t('aiSidebar.actions.saveToNote')}
-            >
-                <svg class="b3-button__icon"><use xlink:href="#iconDownload"></use></svg>
-            </button>
-            <button
-                class="b3-button b3-button--text"
-                on:click={clearChat}
-                title={t('aiSidebar.actions.clear')}
-            >
-                <svg class="b3-button__icon"><use xlink:href="#iconTrashcan"></use></svg>
-            </button>
-            <button
-                class="b3-button b3-button--text"
-                on:click={toggleFullscreen}
-                title={isFullscreen ? '退出全屏' : '全屏查看'}
-            >
-                <svg class="b3-button__icon">
-                    <use
-                        xlink:href={isFullscreen ? '#iconFullscreenExit' : '#iconFullscreen'}
-                    ></use>
-                </svg>
-            </button>
-            <button
-                class="b3-button b3-button--text"
-                on:click={openSettings}
-                title={t('aiSidebar.actions.settings')}
-            >
-                <svg class="b3-button__icon"><use xlink:href="#iconSettings"></use></svg>
-            </button>
+        </div>
+        <div class="ai-sidebar__navigation-content">
+            {#each messageGroups as group, groupIndex (groupIndex)}
+                {@const firstMessage = group.messages[0]}
+                {@const messageIndex = group.startIndex}
+                {#if group.type === 'user' && firstMessage.content}
+                    <button
+                        class="ai-sidebar__navigation-item"
+                        on:click={() => scrollToMessageGroup(groupIndex)}
+                        class:ai-sidebar__navigation-item--active={activeNavigationGroup === groupIndex}
+                    >
+                        <span class="ai-sidebar__navigation-item-number">{groupIndex + 1}</span>
+                        <span class="ai-sidebar__navigation-item-content">
+                            {getNavigationItemContent(firstMessage.content)}
+                        </span>
+                    </button>
+                {/if}
+            {/each}
         </div>
     </div>
 
-    <div class="ai-sidebar__messages" bind:this={messagesContainer} on:scroll={handleScroll}>
-        {#each messageGroups as group, groupIndex (groupIndex)}
-            {@const firstMessage = group.messages[0]}
-            {@const messageIndex = group.startIndex}
-            <div
-                class="ai-message ai-message--{group.type}"
-                on:contextmenu={e => handleContextMenu(e, messageIndex, group.type)}
-            >
-                <div class="ai-message__header">
-                    <span class="ai-message__role">
-                        {group.type === 'user' ? '👤 User' : '🤖 AI'}
-                    </span>
+    <div class="ai-sidebar__main">
+        <div class="ai-sidebar__header">
+            <h3 class="ai-sidebar__title">
+                {#if hasUnsavedChanges}
+                    <span class="ai-sidebar__unsaved" title={t('aiSidebar.unsavedChanges')}>●</span>
+                {/if}
+            </h3>
+            <div class="ai-sidebar__actions">
+                <button
+                    class="b3-button b3-button--text"
+                    on:click={() => showNavigation = true}
+                    title="显示导航"
+                >
+                    <svg class="b3-button__icon"><use xlink:href="#iconList"></use></svg>
+                </button>
+                <button
+                    class="b3-button b3-button--text"
+                    on:click={newSession}
+                    title={t('aiSidebar.session.new')}
+                >
+                    <svg class="b3-button__icon"><use xlink:href="#iconAdd"></use></svg>
+                </button>
+                <SessionManager
+                    bind:sessions
+                    bind:currentSessionId
+                    bind:isOpen={isSessionManagerOpen}
+                    on:refresh={loadSessions}
+                    on:load={e => loadSession(e.detail.sessionId)}
+                    on:delete={e => deleteSession(e.detail.sessionId)}
+                    on:batchDelete={e => batchDeleteSessions(e.detail.sessionIds)}
+                    on:new={newSession}
+                    on:update={e => handleSessionUpdate(e.detail.sessions)}
+                />
+                <div class="ai-sidebar__open-window-menu-container" style="position: relative;">
+                    <button
+                        class="b3-button b3-button--text"
+                        bind:this={openWindowMenuButton}
+                        on:click={toggleOpenWindowMenu}
+                        title="在新窗口打开"
+                    >
+                        <svg class="b3-button__icon"><use xlink:href="#iconOpenWindow"></use></svg>
+                    </button>
+                    {#if showOpenWindowMenu}
+                        <div class="ai-sidebar__open-window-menu">
+                            <button class="b3-menu__item" on:click={openInTab}>
+                                <svg class="b3-menu__icon">
+                                    <use xlink:href="#iconOpenWindow"></use>
+                                </svg>
+                                <span class="b3-menu__label">在页签打开</span>
+                            </button>
+                            <button class="b3-menu__item" on:click={openInNewWindow}>
+                                <svg class="b3-menu__icon">
+                                    <use xlink:href="#iconOpenWindow"></use>
+                                </svg>
+                                <span class="b3-menu__label">在新窗口打开</span>
+                            </button>
+                        </div>
+                    {/if}
                 </div>
+                <button
+                    class="b3-button b3-button--text"
+                    on:click={copyAsMarkdown}
+                    title={t('aiSidebar.actions.copyAllChat')}
+                >
+                    <svg class="b3-button__icon"><use xlink:href="#iconCopy"></use></svg>
+                </button>
+                <button
+                    class="b3-button b3-button--text"
+                    on:click={() => openSaveToNoteDialog()}
+                    title={t('aiSidebar.actions.saveToNote')}
+                >
+                    <svg class="b3-button__icon"><use xlink:href="#iconDownload"></use></svg>
+                </button>
+                <button
+                    class="b3-button b3-button--text"
+                    on:click={clearChat}
+                    title={t('aiSidebar.actions.clear')}
+                >
+                    <svg class="b3-button__icon"><use xlink:href="#iconTrashcan"></use></svg>
+                </button>
+                <button
+                    class="b3-button b3-button--text"
+                    on:click={toggleFullscreen}
+                    title={isFullscreen ? '退出全屏' : '全屏查看'}
+                >
+                    <svg class="b3-button__icon">
+                        <use
+                            xlink:href={isFullscreen ? '#iconFullscreenExit' : '#iconFullscreen'}
+                        ></use>
+                    </svg>
+                </button>
+                <button
+                    class="b3-button b3-button--text"
+                    on:click={openSettings}
+                    title={t('aiSidebar.actions.settings')}
+                >
+                    <svg class="b3-button__icon"><use xlink:href="#iconSettings"></use></svg>
+                </button>
+            </div>
+        </div>
 
-                <!-- 遍历组内的所有消息 -->
-                {#each group.messages as message, msgIndex}
-                    <!-- 跳过 tool 角色的消息，因为它们已经在工具调用区域显示 -->
-                    {#if message.role === 'tool'}
-                        <!-- 不渲染 tool 消息 -->
-                    {:else}
-                        <!-- 显示思考过程 -->
-                        {#if message.role === 'assistant' && message.thinking && !(message.multiModelResponses && message.multiModelResponses.length > 0)}
-                            {@const thinkingIndex = messageIndex + msgIndex}
-                            <div class="ai-message__thinking">
-                                <div
-                                    class="ai-message__thinking-header"
-                                    on:click={() => {
-                                        thinkingCollapsed[thinkingIndex] =
-                                            !thinkingCollapsed[thinkingIndex];
-                                    }}
-                                >
-                                    <svg
-                                        class="ai-message__thinking-icon"
-                                        class:collapsed={thinkingCollapsed[thinkingIndex]}
+        <div class="ai-sidebar__messages" bind:this={messagesContainer} on:scroll={handleScroll}>
+            {#each messageGroups as group, groupIndex (groupIndex)}
+                {@const firstMessage = group.messages[0]}
+                {@const messageIndex = group.startIndex}
+                <div
+                    class="ai-message ai-message--{group.type}"
+                    on:contextmenu={e => handleContextMenu(e, messageIndex, group.type)}
+                    data-group-index={groupIndex}
+                >
+                    <div class="ai-message__header">
+                        <span class="ai-message__role">
+                            {group.type === 'user' ? '👤 User' : '🤖 AI'}
+                        </span>
+                    </div>
+
+                    <!-- 遍历组内的所有消息 -->
+                    {#each group.messages as message, msgIndex}
+                        <!-- 跳过 tool 角色的消息，因为它们已经在工具调用区域显示 -->
+                        {#if message.role === 'tool'}
+                            <!-- 不渲染 tool 消息 -->
+                        {:else}
+                            <!-- 显示思考过程 -->
+                            {#if message.role === 'assistant' && message.thinking && !(message.multiModelResponses && message.multiModelResponses.length > 0)}
+                                {@const thinkingIndex = messageIndex + msgIndex}
+                                <div class="ai-message__thinking">
+                                    <div
+                                        class="ai-message__thinking-header"
+                                        on:click={() => {
+                                            thinkingCollapsed[thinkingIndex] =
+                                                !thinkingCollapsed[thinkingIndex];
+                                        }}
                                     >
-                                        <use xlink:href="#iconRight"></use>
-                                    </svg>
-                                    <span class="ai-message__thinking-title">💭 思考过程</span>
-                                </div>
-                                {#if !thinkingCollapsed[thinkingIndex]}
-                                    <div class="ai-message__thinking-content b3-typography">
-                                        {@html formatMessage(message.thinking)}
+                                        <svg
+                                            class="ai-message__thinking-icon"
+                                            class:collapsed={thinkingCollapsed[thinkingIndex]}
+                                        >
+                                            <use xlink:href="#iconRight"></use>
+                                        </svg>
+                                        <span class="ai-message__thinking-title">💭 思考过程</span>
                                     </div>
-                                {/if}
-                            </div>
-                        {/if}
-
-                        <!-- 显示消息内容（只有在有实际内容时才显示，且没有多模型响应时才显示） -->
-                        {#if message.content && message.content
-                                .toString()
-                                .trim() && !(message.role === 'assistant' && message.multiModelResponses && message.multiModelResponses.length > 0)}
-                            <div
-                                class="ai-message__content b3-typography"
-                                style={messageFontSize ? `font-size: ${messageFontSize}px;` : ''}
-                            >
-                                {@html formatMessage(message.content)}
-                            </div>
-                        {/if}
-
-                        <!-- 显示多模型响应（历史消息） -->
-                        {#if message.role === 'assistant' && message.multiModelResponses && message.multiModelResponses.length > 0}
-                            <div class="ai-message__multi-model-responses">
-                                <div class="ai-message__multi-model-header">
-                                    <h4>🤖 多模型响应</h4>
+                                    {#if !thinkingCollapsed[thinkingIndex]}
+                                        <div class="ai-message__thinking-content b3-typography">
+                                            {@html formatMessage(message.thinking)}
+                                        </div>
+                                    {/if}
                                 </div>
-                                <!-- 使用页签样式显示历史多模型响应 -->
-                                <div class="ai-message__multi-model-tabs">
-                                    <div class="ai-message__multi-model-tab-headers">
-                                        {#each message.multiModelResponses as response, index}
-                                            {@const tabKey = `history_multi_${messageIndex}_${msgIndex}`}
-                                            {@const currentTabIndex =
-                                                thinkingCollapsed[`${tabKey}_selectedTab`] ??
-                                                message.multiModelResponses.findIndex(
-                                                    r => r.isSelected
-                                                ) ??
-                                                0}
-                                            <button
-                                                class="ai-message__multi-model-tab-header"
-                                                class:ai-message__multi-model-tab-header--active={currentTabIndex ===
-                                                    index}
-                                                on:click={() => {
-                                                    thinkingCollapsed[`${tabKey}_selectedTab`] =
-                                                        index;
-                                                    thinkingCollapsed = { ...thinkingCollapsed };
-                                                }}
-                                            >
-                                                <span class="ai-message__multi-model-tab-title">
-                                                    {response.modelName}
-                                                </span>
-                                                {#if response.error}
-                                                    <span
-                                                        class="ai-message__multi-model-tab-status ai-message__multi-model-tab-status--error"
-                                                    >
-                                                        ❌
+                            {/if}
+
+                            <!-- 显示消息内容（只有在有实际内容时才显示，且没有多模型响应时才显示） -->
+                            {#if message.content && message.content
+                                    .toString()
+                                    .trim() && !(message.role === 'assistant' && message.multiModelResponses && message.multiModelResponses.length > 0)}
+                                <div
+                                    class="ai-message__content b3-typography"
+                                    style={messageFontSize ? `font-size: ${messageFontSize}px;` : ''}
+                                >
+                                    {@html formatMessage(message.content)}
+                                </div>
+                            {/if}
+
+                            <!-- 显示多模型响应（历史消息） -->
+                            {#if message.role === 'assistant' && message.multiModelResponses && message.multiModelResponses.length > 0}
+                                <div class="ai-message__multi-model-responses">
+                                    <div class="ai-message__multi-model-header">
+                                        <h4>🤖 多模型响应</h4>
+                                    </div>
+                                    <!-- 使用页签样式显示历史多模型响应 -->
+                                    <div class="ai-message__multi-model-tabs">
+                                        <div class="ai-message__multi-model-tab-headers">
+                                            {#each message.multiModelResponses as response, index}
+                                                {@const tabKey = `history_multi_${messageIndex}_${msgIndex}`}
+                                                {@const currentTabIndex =
+                                                    thinkingCollapsed[`${tabKey}_selectedTab`] ??
+                                                    message.multiModelResponses.findIndex(
+                                                        r => r.isSelected
+                                                    ) ??
+                                                    0}
+                                                <button
+                                                    class="ai-message__multi-model-tab-header"
+                                                    class:ai-message__multi-model-tab-header--active={currentTabIndex ===
+                                                        index}
+                                                    on:click={() => {
+                                                        thinkingCollapsed[`${tabKey}_selectedTab`] =
+                                                            index;
+                                                        thinkingCollapsed = { ...thinkingCollapsed };
+                                                    }}
+                                                >
+                                                    <span class="ai-message__multi-model-tab-title">
+                                                        {response.modelName}
                                                     </span>
-                                                {/if}
-                                            </button>
-                                        {/each}
-                                    </div>
-                                    <div class="ai-message__multi-model-tab-content">
-                                        {#each message.multiModelResponses as response, index}
-                                            {@const tabKey = `history_multi_${messageIndex}_${msgIndex}`}
-                                            {@const currentTabIndex =
-                                                thinkingCollapsed[`${tabKey}_selectedTab`] ??
-                                                message.multiModelResponses.findIndex(
-                                                    r => r.isSelected
-                                                ) ??
-                                                0}
-                                            {#if currentTabIndex === index}
+                                                    {#if response.error}
+                                                        <span
+                                                            class="ai-message__multi-model-tab-status ai-message__multi-model-tab-status--error"
+                                                        >
+                                                            ❌
+                                                        </span>
+                                                    {/if}
+                                                </button>
+                                            {/each}
+                                        </div>
+                                        <div class="ai-message__multi-model-tab-content">
+                                            {#each message.multiModelResponses as response, index}
+                                                {@const tabKey = `history_multi_${messageIndex}_${msgIndex}`}
+                                                {@const currentTabIndex =
+                                                    thinkingCollapsed[`${tabKey}_selectedTab`] ??
+                                                    message.multiModelResponses.findIndex(
+                                                        r => r.isSelected
+                                                    ) ??
+                                                    0}
+                                                {#if currentTabIndex === index}
                                                 <div class="ai-message__multi-model-tab-panel">
                                                     <!-- 添加面板头部，包含复制按钮 -->
                                                     <div
@@ -9716,6 +9818,7 @@
             </div>
         </div>
     {/if}
+</div>
 </div>
 
 <style lang="scss">
@@ -12927,5 +13030,111 @@
         &:hover {
             opacity: 0.9;
         }
+    }
+
+    /* 导航侧边栏样式 */
+    .ai-sidebar {
+        display: flex;
+        flex-direction: row;
+        position: relative;
+    }
+
+    .ai-sidebar__navigation {
+        width: 200px;
+        border-right: 1px solid var(--b3-border-color);
+        background-color: var(--b3-theme-background);
+        display: flex;
+        flex-direction: column;
+        height: 100%;
+        transition: all 0.3s ease;
+        z-index: 10;
+    }
+
+    .ai-sidebar__navigation--hidden {
+        display: none;
+    }
+
+    .ai-sidebar__navigation--fixed {
+        position: fixed;
+        left: 0;
+        top: 0;
+        height: 100vh;
+        box-shadow: 2px 0 8px rgba(0, 0, 0, 0.1);
+    }
+
+    .ai-sidebar__navigation-header {
+        padding: 12px;
+        border-bottom: 1px solid var(--b3-border-color);
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+    }
+
+    .ai-sidebar__navigation-title {
+        font-size: 14px;
+        font-weight: 600;
+        margin: 0;
+        color: var(--b3-theme-primary);
+    }
+
+    .ai-sidebar__navigation-actions {
+        display: flex;
+        gap: 4px;
+    }
+
+    .ai-sidebar__navigation-content {
+        flex: 1;
+        overflow-y: auto;
+        padding: 8px 0;
+    }
+
+    .ai-sidebar__navigation-item {
+        display: flex;
+        align-items: flex-start;
+        padding: 8px 12px;
+        cursor: pointer;
+        border: none;
+        background: none;
+        text-align: left;
+        width: 100%;
+        border-left: 3px solid transparent;
+        transition: all 0.2s ease;
+    }
+
+    .ai-sidebar__navigation-item:hover {
+        background-color: var(--b3-theme-hover);
+    }
+
+    .ai-sidebar__navigation-item--active {
+        background-color: var(--b3-theme-hover);
+        border-left-color: var(--b3-theme-primary);
+        font-weight: 500;
+    }
+
+    .ai-sidebar__navigation-item-number {
+        width: 20px;
+        font-size: 12px;
+        color: var(--b3-theme-text-light);
+        margin-right: 8px;
+        flex-shrink: 0;
+    }
+
+    .ai-sidebar__navigation-item-content {
+        flex: 1;
+        font-size: 12px;
+        line-height: 1.4;
+        color: var(--b3-theme-text);
+        overflow: hidden;
+        text-overflow: ellipsis;
+        display: -webkit-box;
+        -webkit-line-clamp: 2;
+        -webkit-box-orient: vertical;
+    }
+
+    .ai-sidebar__main {
+        flex: 1;
+        display: flex;
+        flex-direction: column;
+        min-width: 0;
     }
 </style>
